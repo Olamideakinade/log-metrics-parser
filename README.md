@@ -9,49 +9,23 @@
 
 ## Key Capabilities
 
-- **Stream Processing**: Efficiently reads standard input or file paths line-by-line with minimal memory allocation.
-- **Aggregation**: Computes request counts, error rates, and latency percentiles (p50, p90, p99).
-- **Configurable Filters**: Exclude or include log levels and specific routing paths via CLI flags.
-- **Structured Output**: Prints clean text reports or exports results as formatted JSON for downstream CI/CD reporting.
+- **Stream Processing**: Efficient line-by-line log ingestion from stdin or files.
+- **Severity Filtering**: Filter log items dynamically by severity level (DEBUG, INFO, WARN, ERROR, FATAL).
+- **Performance Percentiles**: Automatically compute p50, p90, and p99 latency metrics.
+- **Structured Export**: Human-readable text or machine-parseable JSON summary reports.
 
-## Output Demonstration
-
-```bash
-$ cat app.log | log-metrics-parser --min-level WARN --percentiles
-
-Log Metrics Summary
--------------------
-Total Records Processed: 12,450
-Filtered Out:             8,100
-Error Count:                142
-Warning Count:              350
-
-Latency Percentiles (ms):
-  P50: 12.4
-  P90: 45.1
-  P99: 128.9
-```
-
-## Quickstart
-
-Build and install locally using Cargo:
+## Installation
 
 ```bash
-git clone https://github.com/Olamideakinade/log-metrics-parser.git
-cd log-metrics-parser
 cargo build --release
-
-# Run against a sample log file
-./target/release/log-metrics-parser --input sample.log --json
 ```
 
-## Architecture & Design
+## Usage
 
-The codebase is organized into modular components:
-- `src/main.rs`: CLI argument parsing via `clap` and orchestration.
-- `src/parser.rs`: Line-by-line deserialization and struct mapping.
-- `src/aggregator.rs`: Statistical calculations and percentile distribution models.
+```bash
+# Parse from a file with minimum level WARN and JSON output
+log-metrics-parser --input logs.json --min-level WARN --json-output
 
-## License
-
-MIT
+# Pipe from stdin
+cat logs.json | log-metrics-parser --min-level INFO
+```

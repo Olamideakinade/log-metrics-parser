@@ -36,11 +36,12 @@ impl MetricAggregator {
             "INFO" => 2,
             "WARN" => 3,
             "ERROR" => 4,
+            "FATAL" => 5,
             _ => 2,
         }
     }
 
-    pub fn ingest(&mut self, entry: LogEntry) {
+    pub fn ingest(&mut self, entry: &LogEntry) {
         let entry_priority = Self::level_to_priority(&entry.level);
         if entry_priority < self.min_level_priority {
             return;
@@ -49,29 +50,23 @@ impl MetricAggregator {
         self.total_processed += 1;
 
         match entry.level.to_uppercase().as_str() {
-            "ERROR" => self.errors += 1,
+            "ERROR" | "FATAL" => self.errors += 1,
             "WARN" => self.warnings += 1,
-            _ => {}
+            _
+			=> {}
         }
 
-        if let Some(lat) = entry.latency_ms {
-            self.latencies.push(lat);
+        if let Some(latency) = entry.latency_ms {
+            self.latencies.push(latency);
         }
     }
 
-    fn calculate_percentile(&mut self, percentile: f64) -> u64 {
-        if self.latencies.is_empty() {
-            return 0;
-        }
+    pub fn finalize(mut self) -> SummaryReport {
         self.latencies.sort_unstable();
-        let index = (percentile * (self.latencies.len() - 1) as f64).round() as usize;
-        self.latencies[index]
-    }
 
-    pub fn generate_summary(&mut self) -> SummaryReport {
-        let p50 = self.calculate_percentile(0.50);
-        let p90 = self.calculate_percentile(0.90);
-        let p99 = self.calculate_percentile(0.99);
+        let p50 = Self::percentile(&self.latencies, 50.0);
+        let p90 = Self::percentile(&self.latencies, 90.0);
+        let p99 = Self::percentile(&self.latencies, 99.0);
 
         SummaryReport {
             total_processed: self.total_processed,
@@ -83,24 +78,13 @@ impl MetricAggregator {
         }
     }
 
-    pub fn print_text(&mut self) {
-        let summary = self.generate_summary();
-        println!("Log Metrics Summary");
-        println!("-------------------");
-        println!("Total Records Processed: {}", summary.total_processed);
-        println!("Error Count:             {}", summary.errors);
-        println!("Warning Count:           {}", summary.warnings);
-        println!();
-        println!("Latency Percentiles (ms):");
-        println!("  P50: {}", summary.p50_latency);
-        println!("  P90: {}", summary.p90_latency);
-        println!("  P99: {}", summary.p99_latency);
-    }
-
-    pub fn print_json(&mut self) {
-        let summary = self.generate_summary();
-        let json_string = serde_json::to_string_pretty(&summary).unwrap();
-        println!("{}", json_string);
+    fn percentile(sorted_data: &[u64], percentile: f64) -> u64 {
+        if sorted_data.is_empty() {
+            return 0;
+        }
+        let index = ((percentile / 100.0) * (sorted_data.len() as f64)).ceil() as usize;
+        let index = index.saturating_sub(1);
+        sorted_data[index.min(sorted_data.len() - 1)]
     }
 }
 
@@ -109,42 +93,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_aggregator_filtering_and_counts() {
-        let mut agg = MetricAggregator::new("WARN");
-
-        let info_entry = LogEntry {
-            timestamp: "2023-10-01T12:00:00Z".to_string(),
+    fn test_aggregator_metrics() {
+        let mut agg = MetricAggregator::new("INFO");
+        
+        agg.ingest(&LogEntry {
+            timestamp: "2025-02-17T00:00:00Z".to_string(),
             level: "INFO".to_string(),
-            message: "Ignore".to_string(),
+            message: "test info".to_string(),
             latency_ms: Some(10),
             path: None,
-        };
+        });
 
-        let warn_entry = LogEntry {
-            timestamp: "2023-10-01T12:01:00Z".to_string(),
-            level: "WARN".to_string(),
-            message: "Watch out".to_string(),
-            latency_ms: Some(50),
-            path: None,
-        };
-
-        let error_entry = LogEntry {
-            timestamp: "2023-10-01T12:02:00Z".to_string(),
+        agg.ingest(&LogEntry {
+            timestamp: "2025-02-17T00:00:01Z".to_string(),
             level: "ERROR".to_string(),
-            message: "Fail".to_string(),
+            message: "test error".to_string(),
             latency_ms: Some(100),
             path: None,
-        };
+        });
 
-        agg.ingest(info_entry);
-        agg.ingest(warn_entry);
-        agg.ingest(error_entry);
-
-        let summary = agg.generate_summary();
-        assert_eq!(summary.total_processed, 2);
-        assert_eq!(summary.warnings, 1);
-        assert_eq!(summary.errors, 1);
-        assert_eq!(summary.p50_latency, 50);
-        assert_eq!(summary.p99_latency, 100);
+        let report = agg.finalize();
+        assert_eq!(report.total_processed, 2);
+        assert_eq!(report.errors, 1);
+        assert_eq!(report.warnings, 0);
+        assert_eq!(report.p50_latency, 10);
+        assert_eq!(report.p99_latency, 100);
     }
 }

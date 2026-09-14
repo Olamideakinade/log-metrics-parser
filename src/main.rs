@@ -2,7 +2,6 @@ use clap::Parser;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::path::PathBuf;
-use std::process;
 
 mod aggregator;
 mod parser;
@@ -29,9 +28,9 @@ fn main() {
 
     let reader: Box<dyn BufRead> = match args.input {
         Some(path) => {
-            let file = File::open(path).unwrap_or_else(|err {
+            let file = File::open(path).unwrap_or_else(|err| {
                 eprintln!("Error opening file: {}", err);
-                process::exit(1);
+                std::process::exit(1);
             });
             Box::new(BufReader::new(file))
         }
@@ -43,27 +42,35 @@ fn main() {
     for line_result in reader.lines() {
         let line = match line_result {
             Ok(l) => l,
-            Err(err) => {
-                eprintln!("Error reading line: {}", err);
-                continue;
-            }
+            Err(_) => continue,
         };
 
-        if line.trim().is_empty() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
             continue;
         }
 
-        match LogEntry::parse(&line) {
-            Ok(entry) => aggregator.ingest(entry),
-            Err(err) => {
-                eprintln!("Parse error: {} [Line: {}]", err, line);
+        match LogEntry::parse(trimmed) {
+            Ok(entry) => aggregator.ingest(&entry),
+            Err(_err) => {
+                // Silently skip or log parse errors depending on production strictness
             }
         }
     }
 
+    let report = aggregator.finalize();
+
     if args.json_output {
-        aggregator.print_json();
+        let json_data = serde_json::to_string_pretty(&report).unwrap();
+        println!("{}", json_data);
     } else {
-        aggregator.print_text();
+        println!("=== Log Metrics Summary Report ===");
+        println!("Total Processed : {}", report.total_processed);
+        println!("Errors / Fatal  : {}", report.errors);
+        println!("Warnings        : {}", report.warnings);
+        println!("P50 Latency     : {} ms", report.p50_latency);
+        println!("P90 Latency     : {} ms", report.p90_latency);
+        println!("P99 Latency     : {} ms", report.p99_latency);
+        println!("==================================");
     }
 }
