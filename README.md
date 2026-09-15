@@ -9,23 +9,19 @@
 
 ## Key Capabilities
 
-- **Stream Processing**: Efficient line-by-line log ingestion from stdin or files.
-- **Severity Filtering**: Filter log items dynamically by severity level (DEBUG, INFO, WARN, ERROR, FATAL).
-- **Performance Percentiles**: Automatically compute p50, p90, and p99 latency metrics.
-- **Structured Export**: Human-readable text or machine-parseable JSON summary reports.
+- **Stream Processing**: Efficiently parses high-volume newline-delimited JSON logs from stdin or files.
+- **Performance Percentiles**: Calculates exact p50, p90, p99, mean, and max latency figures.
+- **Prometheus Export**: Exposes computed summaries directly in Prometheus text exposition format.
+- **Time-Window Filtering**: Filter log items dynamically based on strict ISO-8601 timestamp bounds.
 
-## Installation
+## Installation & Usage
 
 ```bash
 cargo build --release
-```
 
-## Usage
+# Run with file input and JSON summary
+./target/release/log-metrics-parser --input logs.json --json-output
 
-```bash
-# Parse from a file with minimum level WARN and JSON output
-log-metrics-parser --input logs.json --min-level WARN --json-output
-
-# Pipe from stdin
-cat logs.json | log-metrics-parser --min-level INFO
+# Export directly to Prometheus metrics format
+./target/release/log-metrics-parser --input logs.json --prometheus
 ```

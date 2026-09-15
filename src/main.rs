@@ -21,6 +21,15 @@ struct Args {
 
     #[arg(short, long)]
     json_output: bool,
+
+    #[arg(short, long)]
+    prometheus: bool,
+
+    #[arg(long)]
+    start_time: Option<String>,
+
+    #[arg(long)]
+    end_time: Option<String>,
 }
 
 fn main() {
@@ -28,10 +37,7 @@ fn main() {
 
     let reader: Box<dyn BufRead> = match args.input {
         Some(path) => {
-            let file = File::open(path).unwrap_or_else(|err| {
-                eprintln!("Error opening file: {}", err);
-                std::process::exit(1);
-            });
+            let file = File::open(path).expect("Failed to open input file");
             Box::new(BufReader::new(file))
         }
         None => Box::new(BufReader::new(io::stdin())),
@@ -40,37 +46,42 @@ fn main() {
     let mut aggregator = MetricAggregator::new(&args.min_level);
 
     for line_result in reader.lines() {
-        let line = match line_result {
-            Ok(l) => l,
-            Err(_) => continue,
-        };
-
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        match LogEntry::parse(trimmed) {
-            Ok(entry) => aggregator.ingest(&entry),
-            Err(_err) => {
-                // Silently skip or log parse errors depending on production strictness
+        match line_result {
+            Ok(line) => {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                match LogEntry::parse(&line) {
+                    Ok(entry) => {
+                        if entry.matches_time_window(&args.start_time, &args.end_time) {
+                            aggregator.process_entry(&entry);
+                        }
+                    }
+                    Err(_) => {
+                        // Skip malformed log lines silently or handle if strict mode enabled
+                    }
+                }
             }
+            Err(_) => break,
         }
     }
 
-    let report = aggregator.finalize();
-
-    if args.json_output {
-        let json_data = serde_json::to_string_pretty(&report).unwrap();
-        println!("{}", json_data);
+    if args.prometheus {
+        print!("{}", aggregator.generate_prometheus_output());
+    } else if args.json_output {
+        let report = aggregator.generate_report();
+        let json = serde_json::to_string_pretty(&report).expect("Failed to serialize report");
+        println!("{}", json);
     } else {
-        println!("=== Log Metrics Summary Report ===");
-        println!("Total Processed : {}", report.total_processed);
-        println!("Errors / Fatal  : {}", report.errors);
-        println!("Warnings        : {}", report.warnings);
-        println!("P50 Latency     : {} ms", report.p50_latency);
-        println!("P90 Latency     : {} ms", report.p90_latency);
-        println!("P99 Latency     : {} ms", report.p99_latency);
-        println!("==================================");
+        let report = aggregator.generate_report();
+        println!("=== Log Metrics Summary ===");
+        println!("Total Processed: {}", report.total_processed);
+        println!("Errors:          {}", report.errors);
+        println!("Warnings:        {}", report.warnings);
+        println!("P50 Latency:     {} ms", report.p50_latency);
+        println!("P90 Latency:     {} ms", report.p90_latency);
+        println!("P99 Latency:     {} ms", report.p99_latency);
+        println!("Mean Latency:    {:.2} ms", report.mean_latency);
+        println!("Max Latency:     {} ms", report.max_latency);
     }
 }

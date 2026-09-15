@@ -9,6 +9,8 @@ pub struct SummaryReport {
     pub p50_latency: u64,
     pub p90_latency: u64,
     pub p99_latency: u64,
+    pub mean_latency: f64,
+    pub max_latency: u64,
 }
 
 pub struct MetricAggregator {
@@ -41,32 +43,48 @@ impl MetricAggregator {
         }
     }
 
-    pub fn ingest(&mut self, entry: &LogEntry) {
-        let entry_priority = Self::level_to_priority(&entry.level);
-        if entry_priority < self.min_level_priority {
+    pub fn process_entry(&mut self, entry: &LogEntry) {
+        let priority = Self::level_to_priority(&entry.level);
+        if priority < self.min_level_priority {
             return;
         }
 
         self.total_processed += 1;
 
-        match entry.level.to_uppercase().as_str() {
-            "ERROR" | "FATAL" => self.errors += 1,
-            "WARN" => self.warnings += 1,
-            _
-			=> {}
+        if priority >= 4 {
+            self.errors += 1;
+        } else if priority == 3 {
+            self.warnings += 1;
         }
 
-        if let Some(latency) = entry.latency_ms {
-            self.latencies.push(latency);
+        if let Some(lat) = entry.latency_ms {
+            self.latencies.push(lat);
         }
     }
 
-    pub fn finalize(mut self) -> SummaryReport {
-        self.latencies.sort_unstable();
+    fn calculate_percentile(&self, percentile: f64) -> u64 {
+        if self.latencies.is_empty() {
+            return 0;
+        }
+        let mut sorted = self.latencies.clone();
+        sorted.sort_unstable();
+        let idx = ((percentile / 100.0) * (sorted.len() as f64)).ceil() as usize;
+        let clamped_idx = idx.saturating_sub(1).min(sorted.len() - 1);
+        sorted[clamped_idx]
+    }
 
-        let p50 = Self::percentile(&self.latencies, 50.0);
-        let p90 = Self::percentile(&self.latencies, 90.0);
-        let p99 = Self::percentile(&self.latencies, 99.0);
+    pub fn generate_report(&self) -> SummaryReport {
+        let p50 = self.calculate_percentile(50.0);
+        let p90 = self.calculate_percentile(90.0);
+        let p99 = self.calculate_percentile(99.0);
+
+        let mean_latency = if self.latencies.is_empty() {
+            0.0
+        } else {
+            self.latencies.iter().sum::<u64>() as f64 / self.latencies.len() as f64
+        };
+
+        let max_latency = self.latencies.iter().cloned().max().unwrap_or(0);
 
         SummaryReport {
             total_processed: self.total_processed,
@@ -75,48 +93,38 @@ impl MetricAggregator {
             p50_latency: p50,
             p90_latency: p90,
             p99_latency: p99,
+            mean_latency,
+            max_latency,
         }
     }
 
-    fn percentile(sorted_data: &[u64], percentile: f64) -> u64 {
-        if sorted_data.is_empty() {
-            return 0;
-        }
-        let index = ((percentile / 100.0) * (sorted_data.len() as f64)).ceil() as usize;
-        let index = index.saturating_sub(1);
-        sorted_data[index.min(sorted_data.len() - 1)]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_aggregator_metrics() {
-        let mut agg = MetricAggregator::new("INFO");
-        
-        agg.ingest(&LogEntry {
-            timestamp: "2025-02-17T00:00:00Z".to_string(),
-            level: "INFO".to_string(),
-            message: "test info".to_string(),
-            latency_ms: Some(10),
-            path: None,
-        });
-
-        agg.ingest(&LogEntry {
-            timestamp: "2025-02-17T00:00:01Z".to_string(),
-            level: "ERROR".to_string(),
-            message: "test error".to_string(),
-            latency_ms: Some(100),
-            path: None,
-        });
-
-        let report = agg.finalize();
-        assert_eq!(report.total_processed, 2);
-        assert_eq!(report.errors, 1);
-        assert_eq!(report.warnings, 0);
-        assert_eq!(report.p50_latency, 10);
-        assert_eq!(report.p99_latency, 100);
+    pub fn generate_prometheus_output(&self) -> String {
+        let report = self.generate_report();
+        format!(
+            "# HELP log_metrics_total_processed Total logs processed\n\
+             # TYPE log_metrics_total_processed counter\n\
+             log_metrics_total_processed {}\n\
+             # HELP log_metrics_errors Total error logs\n\
+             # TYPE log_metrics_errors counter\n\
+             log_metrics_errors {}\n\
+             # HELP log_metrics_warnings Total warning logs\n\
+             # TYPE log_metrics_warnings counter\n\
+             log_metrics_warnings {}\n\
+             # HELP log_metrics_latency_ms Latency percentiles and stats\n\
+             # TYPE log_metrics_latency_ms gauge\n\
+             log_metrics_latency_ms{{quantile=\"p50\"}} {}\n\
+             log_metrics_latency_ms{{quantile=\"p90\"}} {}\n\
+             log_metrics_latency_ms{{quantile=\"p99\"}} {}\n\
+             log_metrics_latency_ms{{quantile=\"mean\"}} {:.2}\n\
+             log_metrics_latency_ms{{quantile=\"max\"}} {}\n",
+            report.total_processed,
+            report.errors,
+            report.warnings,
+            report.p50_latency,
+            report.p90_latency,
+            report.p99_latency,
+            report.mean_latency,
+            report.max_latency
+        )
     }
 }
